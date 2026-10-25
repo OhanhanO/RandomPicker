@@ -4,9 +4,11 @@ project(RandomPicker LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 音效资源：生成一份带绝对路径的 .rc，避免 rc.exe / windres 依赖工作目录
+# 图标与音效资源：生成一份带绝对路径的 .rc，避免 rc.exe / windres 依赖工作目录
 set(WIN_WAV "${CMAKE_CURRENT_SOURCE_DIR}/res/win.wav")
 string(REPLACE "\\" "/" WIN_WAV "${WIN_WAV}")
+set(WIN_ICO "${CMAKE_CURRENT_SOURCE_DIR}/res/app.ico")
+string(REPLACE "\\" "/" WIN_ICO "${WIN_ICO}")
 configure_file(res/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
 
 set(RP_SOURCES src/RandomPicker.cpp)

@@ -119,6 +119,7 @@ build_mingw.bat
 RandomPicker/
 ├─ src/RandomPicker.cpp        # 全部源码（单文件）
 ├─ res/win.wav                 # 中奖音效（会被打进 exe）
+├─ res/app.ico                 # 程序图标，16/32/48/64/128/256 六档
 ├─ res/app.rc                  # 资源脚本（bat 用）
 ├─ res/app.rc.in               # 资源脚本模板（CMake 用，自动填绝对路径）
 ├─ CMakeLists.txt              # CMake 构建（MSVC / MinGW 都支持）

@@ -9,6 +9,7 @@
   .titlebar { height: 30px; background: #fbfcfd; border-bottom: 1px solid #dde1e7;
               font-size: 12px; color: #555; display: flex; align-items: center;
               justify-content: space-between; padding: 0 12px; }
+  .tb { display:flex; align-items:center; gap:6px; }
   .client { position: absolute; left: 1px; top: 31px; right: 1px; bottom: 1px;
             background: #EEF2F9; overflow: hidden; }
   .abs { position: absolute; }
@@ -50,7 +51,7 @@
 <body>
 
 <div class="win">
-  <div class="titlebar"><span>随机抽号器</span><span>—　□　×</span></div>
+  <div class="titlebar"><span class="tb"><img src="icon-32.png" width="16" height="16">随机抽号器</span><span>—　□　×</span></div>
   <div class="client">
     <div class="abs title">随机抽号器</div>
 

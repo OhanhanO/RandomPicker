@@ -56,7 +56,8 @@ static const int ID_ED_START  = 1001;
 static const int ID_ED_END    = 1002;
 static const int ID_ED_RESULT = 1003;
 
-static const int IDW_WIN = 200;               // 资源里的胜利音效
+static const int IDI_RP_APP = 101;            // 资源里的图标
+static const int IDW_WIN    = 200;            // 资源里的胜利音效
 
 static const UINT_PTR kTimerAnim = 1;
 
@@ -1545,8 +1546,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = CreateSolidBrush(C_BG);
     wc.lpszClassName = L"RandomPickerClass";
-    wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
-    wc.hIconSm       = LoadIconW(nullptr, IDI_APPLICATION);
+    HICON hIconBig = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_RP_APP), IMAGE_ICON,
+                                       0, 0, LR_DEFAULTSIZE | LR_SHARED);
+    HICON hIconSm  = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_RP_APP), IMAGE_ICON,
+                                       GetSystemMetrics(SM_CXSMICON),
+                                       GetSystemMetrics(SM_CYSMICON), LR_SHARED);
+    if (!hIconBig) hIconBig = LoadIconW(nullptr, IDI_APPLICATION);
+    if (!hIconSm)  hIconSm  = hIconBig;
+    wc.hIcon         = hIconBig;
+    wc.hIconSm       = hIconSm;
     if (!RegisterClassExW(&wc)) return 1;
 
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
