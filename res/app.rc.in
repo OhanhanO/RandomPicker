@@ -1,0 +1,5 @@
+// 由 CMake 生成：@WIN_WAV@ 会被替换成 win.wav 的绝对路径，
+// 这样 MSVC 的 rc.exe 和 MinGW 的 windres 都不依赖工作目录。
+#define IDW_WIN 200
+
+IDW_WIN WAVE "@WIN_WAV@"

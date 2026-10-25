@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+cd /d "%~dp0"
 setlocal
 
 rem ---------------------------------------------------------------
@@ -14,9 +15,21 @@ if errorlevel 1 (
     exit /b 1
 )
 
+where rc >nul 2>nul
+if errorlevel 1 (
+    echo [错误] 没找到 rc.exe（资源编译器），无法把音效打进去。
+    exit /b 1
+)
+
+rc /nologo /fo res\app.res res\app.rc
+if errorlevel 1 (
+    echo [失败] 资源编译出错。
+    exit /b 1
+)
+
 cl /nologo /std:c++17 /utf-8 /O2 /MT /EHsc /DUNICODE /D_UNICODE ^
-   src\RandomPicker.cpp ^
-   /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib /OUT:RandomPicker.exe
+   src\RandomPicker.cpp res\app.res ^
+   /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib winmm.lib /OUT:RandomPicker.exe
 
 if errorlevel 1 (
     echo [失败] 编译出错。

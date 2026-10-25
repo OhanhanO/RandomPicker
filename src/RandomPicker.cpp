@@ -1,7 +1,7 @@
 // ============================================================================
 //  RandomPicker —— 随机抽号器（单文件 Win32 / GDI，无第三方依赖）
 //
-//  主界面：起始号码 / 终止号码 / 抽中号码 / 开始
+//  主界面：起始号码 / 终止号码 / 抽中号码 / 开始 + CS 开箱式卷轴
 //  Shift + 点「开始」进入权重后台：每个号码可直接调到 0% ~ 100%，
 //  总和恒为 100%，调高一个，其余按比例让出。
 // ============================================================================
@@ -24,6 +24,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <mmsystem.h>
 
 // 保险：某些精简 SDK / 老 MinGW 头文件里没有这个宏
 #ifndef WM_DPICHANGED
@@ -34,6 +35,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <cwchar>
 #include <random>
 #include <string>
@@ -43,6 +45,7 @@
 #if defined(_MSC_VER)
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "winmm.lib")
 #endif
 
 // ---------------------------------------------------------------- 常量
@@ -53,7 +56,17 @@ static const int ID_ED_START  = 1001;
 static const int ID_ED_END    = 1002;
 static const int ID_ED_RESULT = 1003;
 
-static const UINT_PTR kTimerRoll = 1;
+static const int IDW_WIN = 200;               // 资源里的胜利音效
+
+static const UINT_PTR kTimerAnim = 1;
+
+// 卷轴
+static const int kTileW     = 120;
+static const int kTileH     = 150;
+static const int kTilePitch = 132;
+static const int kReelTiles = 56;
+static const int kAnimMs    = 4800;
+static const int kPulseMs   = 900;
 
 static const COLORREF C_BG      = RGB(238, 242, 249);
 static const COLORREF C_CARD    = RGB(255, 255, 255);
@@ -69,6 +82,15 @@ static const COLORREF C_THUMB   = RGB(196, 205, 219);
 static const COLORREF C_SHADOW  = RGB(224, 229, 238);
 static const COLORREF C_WELL    = RGB(247, 250, 255);
 static const COLORREF C_SEP     = RGB(241, 244, 250);
+static const COLORREF C_OFF     = RGB(206, 213, 224);
+
+static const COLORREF C_RARE[4] = {
+    RGB(176, 195, 217),   // 灰
+    RGB( 75, 105, 255),   // 蓝
+    RGB( 76, 195, 138),   // 绿
+    RGB(235,  75,  75),   // 红
+};
+static const COLORREF C_GOLD = RGB(240, 180, 41);
 
 // ---------------------------------------------------------------- 状态
 
@@ -92,33 +114,39 @@ struct App
     long long             pEnd   = -1;
     std::vector<double>   pct;
 
+    // 卷轴
+    std::vector<long long>   reel;       // 每格的号码
+    std::vector<unsigned char> rare;     // 每格的稀有度 0..3
+    int    winnerIdx = 0;
+    double reelOffset = 0.0;
+    int    phase = 0;                    // 0 静止, 1 滚动, 2 定格脉冲
+    bool   hasLanded = false;            // 已经抽完并点亮金色
+    ULONGLONG phaseStart = 0;
+
+    bool  soundOn = true;
+
     std::mt19937_64 rng;
 
     HFONT fTitle = nullptr, fLabel = nullptr, fInput = nullptr, fResult = nullptr;
-    HFONT fBtn = nullptr, fRow = nullptr, fPct = nullptr;
+    HFONT fBtn = nullptr, fRow = nullptr, fPct = nullptr, fTile = nullptr, fTileSm = nullptr;
 
     HBRUSH brCard = nullptr;
 
-    // 主界面布局
-    RECT rcTitle{}, rcStartLabel{}, rcEndLabel{}, rcStartEdit{}, rcEndEdit{};
-    RECT rcCard{}, rcCardLabel{}, rcResultEdit{}, rcBtnStart{};
-
-    // 后台布局
+    // 布局
+    RECT rcTitle{}, rcSoundLabel{}, rcSound{};
+    RECT rcStartLabel{}, rcEndLabel{}, rcStartEdit{}, rcEndEdit{}, rcBtnStart{};
+    RECT rcReel{}, rcCard{}, rcCardLabel{}, rcResultEdit{};
     RECT rcBkTitle{}, rcAll5{}, rcAll0{}, rcList{}, rcSave{};
 
     int          scrollRow = 0;
-    int          selRow    = 0;    // 0 基
+    int          selRow    = 0;
     bool         editing   = false;
     std::wstring typeBuf;
 
     int  pressBtn = 0;   // 1 = 开始, 2 = 保存, 3 = 均分, 4 = 清零
-    int  hot      = 0;   // 悬停：同上编号
+    int  hot      = 0;   // 悬停
     bool tracking = false;
-    int  dragRow  = -1;  // 正在拖拽拖动条的行
-
-    bool      rolling   = false;
-    ULONGLONG rollEnd   = 0;
-    long long finalPick = 0;
+    int  dragRow  = -1;
 };
 
 static App G;
@@ -131,6 +159,16 @@ static RECT Inflate(RECT r, int d)
 {
     r.left -= d; r.top -= d; r.right += d; r.bottom += d;
     return r;
+}
+
+static COLORREF Mix(COLORREF a, COLORREF b, double t)
+{
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    int r = (int)(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * t);
+    int g = (int)(GetGValue(a) + (GetGValue(b) - GetGValue(a)) * t);
+    int bl = (int)(GetBValue(a) + (GetBValue(b) - GetBValue(a)) * t);
+    return RGB(r, g, bl);
 }
 
 static void RoundFill(HDC dc, const RECT& r, int rad, COLORREF fill, COLORREF border)
@@ -146,7 +184,6 @@ static void RoundFill(HDC dc, const RECT& r, int rad, COLORREF fill, COLORREF bo
     DeleteObject(br);
 }
 
-// 扁平阴影：卡片下方露一条浅色边，营造层次
 static void SoftShadow(HDC dc, const RECT& r, int rad)
 {
     RECT s1 = { r.left + S(2), r.top + S(3), r.right - S(2), r.bottom + S(3) };
@@ -179,29 +216,32 @@ static HFONT MakeFont(int pt, int weight, const wchar_t* face)
 
 static void MakeFonts()
 {
-    if (G.fTitle) DeleteObject(G.fTitle);
-    if (G.fLabel) DeleteObject(G.fLabel);
-    if (G.fInput) DeleteObject(G.fInput);
+    if (G.fTitle)  DeleteObject(G.fTitle);
+    if (G.fLabel)  DeleteObject(G.fLabel);
+    if (G.fInput)  DeleteObject(G.fInput);
     if (G.fResult) DeleteObject(G.fResult);
-    if (G.fBtn) DeleteObject(G.fBtn);
-    if (G.fRow) DeleteObject(G.fRow);
-    if (G.fPct) DeleteObject(G.fPct);
+    if (G.fBtn)    DeleteObject(G.fBtn);
+    if (G.fRow)    DeleteObject(G.fRow);
+    if (G.fPct)    DeleteObject(G.fPct);
+    if (G.fTile)   DeleteObject(G.fTile);
+    if (G.fTileSm) DeleteObject(G.fTileSm);
 
     const wchar_t* face = L"Microsoft YaHei UI";
-    G.fTitle  = MakeFont(20, FW_BOLD,   face);
-    G.fLabel  = MakeFont(11, FW_NORMAL, face);
-    G.fInput  = MakeFont(18, FW_NORMAL, face);
-    G.fResult = MakeFont(54, FW_BOLD,   face);
-    G.fBtn    = MakeFont(19, FW_BOLD,   face);
-    G.fRow    = MakeFont(15, FW_NORMAL, face);
-    G.fPct    = MakeFont(13, FW_NORMAL, face);
+    G.fTitle  = MakeFont(24, FW_BOLD,   face);
+    G.fLabel  = MakeFont(12, FW_NORMAL, face);
+    G.fInput  = MakeFont(20, FW_NORMAL, face);
+    G.fResult = MakeFont(48, FW_BOLD,   face);
+    G.fBtn    = MakeFont(20, FW_BOLD,   face);
+    G.fRow    = MakeFont(16, FW_NORMAL, face);
+    G.fPct    = MakeFont(14, FW_NORMAL, face);
+    G.fTile   = MakeFont(34, FW_BOLD,   face);
+    G.fTileSm = MakeFont(21, FW_BOLD,   face);
 
     if (G.edStart)  SendMessageW(G.edStart,  WM_SETFONT, (WPARAM)G.fInput,  TRUE);
     if (G.edEnd)    SendMessageW(G.edEnd,    WM_SETFONT, (WPARAM)G.fInput,  TRUE);
     if (G.edResult) SendMessageW(G.edResult, WM_SETFONT, (WPARAM)G.fResult, TRUE);
 }
 
-// 百分比文本：大值取整，小值保留一位，极小显示 <0.1%
 static std::wstring PctText(double v)
 {
     if (v <= 0.0004) return L"0%";
@@ -241,7 +281,6 @@ static void NormalizePct()
     for (double& v : G.pct) v *= k;
 }
 
-// 按号码保留旧概率，重新铺开；新号码给平均值
 static void RebuildPct()
 {
     std::vector<double> nw;
@@ -253,7 +292,7 @@ static void RebuildPct()
         {
             double s = 0.0;
             for (double v : G.pct) s += v;
-            if (s > 1e-9 && G.pct.size() > 0)
+            if (s > 1e-9)
                 avg = s / (double)G.pct.size();
         }
 
@@ -279,7 +318,6 @@ static void RebuildPct()
     NormalizePct();
 }
 
-// 把某一行设成 target%，其余按比例让出剩余份额
 static void SetPercent(int row, double target)
 {
     int n = (int)G.pct.size();
@@ -327,6 +365,25 @@ static bool PickOne(long long& out)
     return false;
 }
 
+// 按概率抽一个号，用累积表 + 二分，供卷轴填充使用
+static long long PickFromCum(const std::vector<double>& cum, double total)
+{
+    if (cum.empty() || total <= 1e-9) return G.startN;
+
+    std::uniform_real_distribution<double> dist(0.0, total);
+    double r = dist(G.rng);
+
+    size_t lo = 0, hi = cum.size();
+    while (lo < hi)
+    {
+        size_t mid = lo + (hi - lo) / 2;
+        if (cum[mid] <= r) lo = mid + 1;
+        else               hi = mid;
+    }
+    if (lo >= cum.size()) lo = cum.size() - 1;
+    return G.startN + (long long)lo;
+}
+
 static bool ReadInt64(HWND ed, long long& out)
 {
     wchar_t buf[64] = {};
@@ -364,6 +421,95 @@ static bool ValidateRange(std::wstring& msg)
     return true;
 }
 
+// ---------------------------------------------------------------- 卷轴
+
+static void BuildReel()
+{
+    G.reel.clear();
+    G.rare.clear();
+
+    int n = (int)G.pct.size();
+    if (n <= 0) return;
+
+    std::vector<double> cum((size_t)n, 0.0);
+    double acc = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        acc += G.pct[(size_t)i];
+        cum[(size_t)i] = acc;
+    }
+    double total = acc;
+
+    long long winner = G.startN;
+    if (!PickOne(winner)) winner = G.startN;
+
+    // 中奖格放在偏后位置，保证有足够的滚动距离
+    int lo = kReelTiles - 16;
+    int hi = kReelTiles - 5;
+    if (lo < 0) lo = 0;
+    if (hi < lo) hi = lo;
+    int winnerIdx = lo + (int)(G.rng() % (unsigned long long)(hi - lo + 1));
+
+    G.reel.resize((size_t)kReelTiles);
+    G.rare.resize((size_t)kReelTiles);
+
+    for (int i = 0; i < kReelTiles; ++i)
+    {
+        if (i == winnerIdx)
+        {
+            G.reel[(size_t)i] = winner;
+            G.rare[(size_t)i] = 1;              // 滚动期间按普通稀有度显示，隐藏剧情
+        }
+        else
+        {
+            G.reel[(size_t)i] = PickFromCum(cum, total);
+            // 稀有度分布：灰 55% / 蓝 28% / 绿 12% / 红 5%
+            unsigned int r = (unsigned int)(G.rng() % 1000ULL);
+            unsigned char k = 0;
+            if (r >= 550) k = 1;
+            if (r >= 830) k = 2;
+            if (r >= 950) k = 3;
+            G.rare[(size_t)i] = k;
+        }
+    }
+
+    G.winnerIdx  = winnerIdx;
+    G.reelOffset = 0.0;
+}
+
+// 卷轴中心对应的滚动偏移
+static double ReelTargetOffset()
+{
+    int cx = (G.rcReel.left + G.rcReel.right) / 2;
+    return (double)G.rcReel.left + (double)(G.winnerIdx * S(kTilePitch)) +
+           (double)(S(kTileW) / 2) - (double)cx;
+}
+
+static std::wstring SoundPath()
+{
+    wchar_t p[MAX_PATH] = {};
+    DWORD   n = GetModuleFileNameW(nullptr, p, MAX_PATH);
+    std::wstring s(p, n);
+    size_t k = s.find_last_of(L'\\');
+    if (k != std::wstring::npos) s.resize(k);
+    return s + L"\\win.wav";
+}
+
+static void StopSound()
+{
+    PlaySoundW(nullptr, nullptr, 0);
+}
+
+static void PlayWinSound()
+{
+    if (!G.soundOn) return;
+    if (PlaySoundW(MAKEINTRESOURCEW(IDW_WIN), G.hinst,
+                   SND_RESOURCE | SND_ASYNC | SND_NODEFAULT))
+        return;
+    std::wstring p = SoundPath();
+    PlaySoundW(p.c_str(), nullptr, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+}
+
 // ---------------------------------------------------------------- 布局
 
 static void Layout()
@@ -371,36 +517,40 @@ static void Layout()
     RECT rc = {};
     GetClientRect(G.hwnd, &rc);
     const int W   = rc.right;
-    const int pad = S(36);
+    const int pad = S(40);
     const int cw  = W - pad * 2;
 
-    G.rcTitle = { pad, S(26), pad + S(320), S(70) };
+    G.rcTitle      = { pad, S(24), pad + S(460), S(74) };
+    G.rcSoundLabel = { W - pad - S(118), S(40), W - pad - S(64), S(68) };
+    G.rcSound      = { W - pad - S(56), S(38), W - pad, S(68) };
 
     if (G.page == 0)
     {
-        int gap  = S(22);
-        int colW = (cw - gap) / 2;
+        int gap = S(20);
+        int colW = S(260);
+        int btnX = pad + colW * 2 + gap * 2;
 
-        G.rcStartLabel = { pad, S(98),  pad + colW, S(120) };
-        G.rcEndLabel   = { pad + colW + gap, S(98), W - pad, S(120) };
-        G.rcStartEdit  = { pad, S(124), pad + colW, S(186) };
-        G.rcEndEdit    = { pad + colW + gap, S(124), W - pad, S(186) };
+        G.rcStartLabel = { pad, S(100), pad + colW, S(124) };
+        G.rcEndLabel   = { pad + colW + gap, S(100), pad + colW * 2 + gap, S(124) };
+        G.rcStartEdit  = { pad, S(126), pad + colW, S(190) };
+        G.rcEndEdit    = { pad + colW + gap, S(126), pad + colW * 2 + gap, S(190) };
+        G.rcBtnStart   = { btnX, S(126), W - pad, S(190) };
 
-        G.rcCard       = { pad, S(214), W - pad, S(408) };
-        G.rcCardLabel  = { G.rcCard.left + S(22), G.rcCard.top + S(16),
-                           G.rcCard.right - S(22), G.rcCard.top + S(42) };
-        G.rcResultEdit = { G.rcCard.left + S(14), G.rcCard.top + S(52),
-                           G.rcCard.right - S(14), G.rcCard.bottom - S(16) };
+        G.rcReel = { pad, S(214), W - pad, S(434) };
 
-        G.rcBtnStart = { pad, S(434), W - pad, S(502) };
+        G.rcCard       = { pad, S(458), W - pad, S(594) };
+        G.rcCardLabel  = { G.rcCard.left + S(22), G.rcCard.top + S(12),
+                           G.rcCard.right - S(22), G.rcCard.top + S(38) };
+        G.rcResultEdit = { G.rcCard.left + S(14), G.rcCard.top + S(42),
+                           G.rcCard.right - S(14), G.rcCard.bottom - S(10) };
     }
     else
     {
-        G.rcBkTitle = { pad, S(26), pad + S(320), S(70) };
-        G.rcAll5    = { W - pad - S(112) * 2 - S(12), S(32), W - pad - S(112) - S(12), S(68) };
-        G.rcAll0    = { W - pad - S(112), S(32), W - pad, S(68) };
-        G.rcList    = { pad, S(96), W - pad, S(452) };
-        G.rcSave    = { pad, S(468), W - pad, S(524) };
+        G.rcBkTitle = { pad, S(24), pad + S(320), S(74) };
+        G.rcAll5    = { W - pad - S(120) * 2 - S(12), S(30), W - pad - S(120) - S(12), S(70) };
+        G.rcAll0    = { W - pad - S(120), S(30), W - pad, S(70) };
+        G.rcList    = { pad, S(96), W - pad, S(540) };
+        G.rcSave    = { pad, S(556), W - pad, S(612) };
     }
 }
 
@@ -426,6 +576,105 @@ static void PlaceEdits()
 
 // ---------------------------------------------------------------- 绘制
 
+static void DrawTile(HDC dc, RECT tile, long long num, int rarity, bool gold, double glow)
+{
+    COLORREF col = gold ? C_GOLD : C_RARE[rarity & 3];
+
+    if (gold)
+    {
+        for (int k = 3; k >= 1; --k)
+        {
+            RECT g = Inflate(tile, (int)(S(5) * k * (1.0 + glow * 0.35)));
+            COLORREF gc = Mix(C_CARD, C_GOLD, 0.08 + 0.07 * (double)(3 - k));
+            RoundFill(dc, g, S(18), gc, gc);
+        }
+    }
+
+    RoundFill(dc, tile, S(14), Mix(C_CARD, col, gold ? 0.16 : 0.07), col);
+
+    // 底部色条
+    RECT bar = { tile.left + S(10), tile.bottom - S(12), tile.right - S(10), tile.bottom - S(7) };
+    RoundFill(dc, bar, S(3), col, col);
+
+    std::wstring s = std::to_wstring(num);
+    HFONT f = (s.size() <= 3) ? G.fTile : G.fTileSm;
+    TextOut2(dc, s, tile, f, C_TEXT, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static void PaintReel(HDC dc)
+{
+    SoftShadow(dc, G.rcReel, S(20));
+    RoundFill(dc, G.rcReel, S(20), C_CARD, C_BORDER);
+
+    int saveDC = SaveDC(dc);
+    IntersectClipRect(dc, G.rcReel.left + S(4), G.rcReel.top + S(4),
+                      G.rcReel.right - S(4), G.rcReel.bottom - S(4));
+
+    int tileTop = G.rcReel.top + (G.rcReel.bottom - G.rcReel.top - S(kTileH)) / 2;
+    double off  = G.reelOffset;
+
+    double glow = 0.0;
+    if (G.phase == 2)
+    {
+        double t = (double)(GetTickCount64() - G.phaseStart) / (double)kPulseMs;
+        if (t > 1.0) t = 1.0;
+        glow = std::sin(t * 3.14159265358979);
+    }
+
+    int n = (int)G.reel.size();
+    for (int i = 0; i < n; ++i)
+    {
+        int x = G.rcReel.left + (int)((double)(i * S(kTilePitch)) - off);
+        if (x > G.rcReel.right + S(40)) break;
+        if (x + S(kTileW) < G.rcReel.left - S(40)) continue;
+
+        RECT tile = { x, tileTop, x + S(kTileW), tileTop + S(kTileH) };
+        bool gold = (G.hasLanded && G.phase != 1 && i == G.winnerIdx);
+        DrawTile(dc, tile, G.reel[(size_t)i], (int)G.rare[(size_t)i], gold, glow);
+    }
+
+    // 中心标记：上下两个小三角
+    int cx = (G.rcReel.left + G.rcReel.right) / 2;
+    POINT tri[3];
+    HBRUSH bt = CreateSolidBrush(C_ACCENT);
+    HPEN   pt = CreatePen(PS_SOLID, 1, C_ACCENT);
+    HGDIOBJ ob = SelectObject(dc, bt);
+    HGDIOBJ op = SelectObject(dc, pt);
+
+    tri[0].x = cx - S(7); tri[0].y = G.rcReel.top + S(6);
+    tri[1].x = cx + S(7); tri[1].y = G.rcReel.top + S(6);
+    tri[2].x = cx;        tri[2].y = G.rcReel.top + S(16);
+    Polygon(dc, tri, 3);
+
+    tri[0].x = cx - S(7); tri[0].y = G.rcReel.bottom - S(6);
+    tri[1].x = cx + S(7); tri[1].y = G.rcReel.bottom - S(6);
+    tri[2].x = cx;        tri[2].y = G.rcReel.bottom - S(16);
+    Polygon(dc, tri, 3);
+
+    SelectObject(dc, op);
+    SelectObject(dc, ob);
+    DeleteObject(pt);
+    DeleteObject(bt);
+
+    RestoreDC(dc, saveDC);
+}
+
+static void PaintSoundToggle(HDC dc)
+{
+    TextOut2(dc, L"音效", G.rcSoundLabel, G.fLabel, C_MUTED,
+             DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT t = G.rcSound;
+    RoundFill(dc, t, (t.bottom - t.top) / 2, G.soundOn ? C_ACCENT : C_OFF,
+              G.soundOn ? C_ACCENT : C_OFF);
+
+    int d = t.bottom - t.top - S(8);
+    int cy = (t.top + t.bottom) / 2;
+    int knobX = G.soundOn ? (t.right - S(4) - d) : (t.left + S(4));
+    RECT knob = { knobX, cy - d / 2, knobX + d, cy + d / 2 };
+    RoundFill(dc, knob, d / 2, RGB(255, 255, 255), RGB(255, 255, 255));
+}
+
 static void PaintMain(HDC dc)
 {
     HBRUSH bg = CreateSolidBrush(C_BG);
@@ -437,6 +686,8 @@ static void PaintMain(HDC dc)
     TextOut2(dc, L"随机抽号器", G.rcTitle, G.fTitle, C_TEXT,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
+    PaintSoundToggle(dc);
+
     TextOut2(dc, L"起始号码", G.rcStartLabel, G.fLabel, C_MUTED,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     TextOut2(dc, L"终止号码", G.rcEndLabel, G.fLabel, C_MUTED,
@@ -445,27 +696,26 @@ static void PaintMain(HDC dc)
     bool fStart = (GetFocus() == G.edStart);
     bool fEnd   = (GetFocus() == G.edEnd);
 
-    RECT r1 = Inflate(G.rcStartEdit, S(2));
-    RECT r2 = Inflate(G.rcEndEdit, S(2));
-    RoundFill(dc, r1, S(14), C_CARD, fStart ? C_ACCENT : C_BORDER);
-    RoundFill(dc, r2, S(14), C_CARD, fEnd   ? C_ACCENT : C_BORDER);
+    RoundFill(dc, Inflate(G.rcStartEdit, S(2)), S(14), C_CARD, fStart ? C_ACCENT : C_BORDER);
+    RoundFill(dc, Inflate(G.rcEndEdit, S(2)), S(14), C_CARD, fEnd   ? C_ACCENT : C_BORDER);
+
+    COLORREF btn = (G.pressBtn == 1 || G.hot == 1) ? C_ACC_DK : C_ACCENT;
+    if (G.phase != 0) btn = Mix(C_ACCENT, C_CARD, 0.45);
+    RoundFill(dc, G.rcBtnStart, S(16), btn, btn);
+    TextOut2(dc, L"开 始", G.rcBtnStart, G.fBtn, RGB(255, 255, 255),
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    PaintReel(dc);
 
     SoftShadow(dc, G.rcCard, S(20));
     RoundFill(dc, G.rcCard, S(20), C_CARD, C_BORDER);
     TextOut2(dc, L"抽中号码", G.rcCardLabel, G.fLabel, C_MUTED,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    RECT well = Inflate(G.rcResultEdit, S(2));
-    RoundFill(dc, well, S(14), C_WELL,
+    RoundFill(dc, Inflate(G.rcResultEdit, S(2)), S(14), C_WELL,
               GetFocus() == G.edResult ? C_ACCENT : C_BORDER);
-
-    COLORREF btn = (G.pressBtn == 1 || G.hot == 1) ? C_ACC_DK : C_ACCENT;
-    RoundFill(dc, G.rcBtnStart, S(18), btn, btn);
-    TextOut2(dc, L"开 始", G.rcBtnStart, G.fBtn, RGB(255, 255, 255),
-             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-static int RowHeight() { return S(48); }
+static int RowHeight() { return S(52); }
 
 static int VisibleRows()
 {
@@ -473,8 +723,8 @@ static int VisibleRows()
     return v < 1 ? 1 : v;
 }
 
-static int BarLeft()  { return G.rcList.left + S(152); }
-static int BarWidth() { return (G.rcList.right - S(132)) - BarLeft(); }
+static int BarLeft()  { return G.rcList.left + S(200); }
+static int BarWidth() { return (G.rcList.right - S(170)) - BarLeft(); }
 
 static RECT RowRect(int index)
 {
@@ -540,16 +790,13 @@ static void PaintBack(HDC dc)
         RECT row = RowRect(i);
         bool sel = (i == G.selRow);
 
-        if (sel)
-            RoundFill(dc, Inflate(row, -S(2)), S(12), C_SEL, C_SEL);
+        if (sel) RoundFill(dc, Inflate(row, -S(2)), S(12), C_SEL, C_SEL);
 
-        // 号码
         std::wstring num = std::to_wstring(G.startN + (long long)i);
-        RECT numRc = { row.left + S(18), row.top, G.rcList.left + S(150), row.bottom };
+        RECT numRc = { row.left + S(22), row.top, G.rcList.left + S(196), row.bottom };
         TextOut2(dc, num, numRc, G.fRow, C_TEXT,
                  DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-        // 拖动条
         RECT bar = BarRect(i);
         RoundFill(dc, bar, S(5), C_TRACK, C_TRACK);
 
@@ -563,16 +810,15 @@ static void PaintBack(HDC dc)
             RoundFill(dc, f, S(5), C_ACCENT, C_ACCENT);
         }
 
-        // 百分比
         std::wstring txt = (sel && G.editing) ? G.typeBuf : PctText(v);
-        RECT pctRc = { G.rcList.right - S(120), row.top, G.rcList.right - S(22), row.bottom };
+        RECT pctRc = { G.rcList.right - S(160), row.top, G.rcList.right - S(26), row.bottom };
         TextOut2(dc, txt, pctRc, G.fPct,
                  (sel && G.editing) ? C_ACCENT : (v <= 0.0 ? C_MUTED : C_TEXT),
                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
         if (i != G.scrollRow + VisibleRows() - 1 && i != count - 1)
         {
-            RECT sep = { row.left + S(18), row.bottom - 1, row.right - S(18), row.bottom };
+            RECT sep = { row.left + S(22), row.bottom - 1, row.right - S(22), row.bottom };
             HBRUSH b = CreateSolidBrush(C_SEP);
             FillRect(dc, &sep, b);
             DeleteObject(b);
@@ -628,7 +874,7 @@ static void Render()
 
 // ---------------------------------------------------------------- 行为
 
-static void SaveConfig();   // 定义见下方「配置」
+static void SaveConfig();
 
 static void SetResultText(long long v)
 {
@@ -640,9 +886,9 @@ static void ShowError(const std::wstring& msg)
     MessageBoxW(G.hwnd, msg.c_str(), L"随机抽号器", MB_OK | MB_ICONWARNING);
 }
 
-static void DoDraw()
+static void StartDraw()
 {
-    if (G.rolling) return;
+    if (G.phase != 0) return;
 
     std::wstring msg;
     if (!ValidateRange(msg)) { ShowError(msg); return; }
@@ -650,24 +896,54 @@ static void DoDraw()
     RebuildPct();
     double total = 0.0;
     for (double v : G.pct) total += v;
-    if (total <= 1e-9)
+    if (total <= 1e-9) { ShowError(L"范围内所有号码都是 0%"); return; }
+
+    StopSound();
+    BuildReel();
+
+    G.hasLanded  = false;
+    G.phase      = 1;
+    G.phaseStart = GetTickCount64();
+    G.reelOffset = 0.0;
+    SetTimer(G.hwnd, kTimerAnim, 16, nullptr);
+    InvalidateRect(G.hwnd, nullptr, FALSE);
+}
+
+static void Land()
+{
+    G.phase      = 2;
+    G.hasLanded  = true;
+    G.phaseStart = GetTickCount64();
+    if (G.winnerIdx >= 0 && G.winnerIdx < (int)G.reel.size())
+        SetResultText(G.reel[(size_t)G.winnerIdx]);
+    PlayWinSound();
+}
+
+static void TickAnim()
+{
+    ULONGLONG now = GetTickCount64();
+    if (G.phase == 1)
     {
-        ShowError(L"范围内所有号码都是 0%");
-        return;
+        double t = (double)(now - G.phaseStart) / (double)kAnimMs;
+        if (t > 1.0) t = 1.0;
+
+        double e = 1.0 - std::pow(1.0 - t, 4.0);
+        if (t > 0.86) e += 0.002 * std::sin((t - 0.86) / 0.14 * 3.14159265358979);
+
+        G.reelOffset = ReelTargetOffset() * e;
+        if (t >= 1.0) Land();
+    }
+    else if (G.phase == 2)
+    {
+        if (now - G.phaseStart >= (ULONGLONG)kPulseMs)
+        {
+            G.phase = 0;
+            KillTimer(G.hwnd, kTimerAnim);
+        }
     }
 
-    long long pick = 0;
-    if (!PickOne(pick))
-    {
-        ShowError(L"抽取失败：请检查号码范围与概率");
-        return;
-    }
-
-    G.finalPick = pick;
-    G.rolling   = true;
-    G.rollEnd   = GetTickCount64() + 420;
-    SetResultText(pick);
-    SetTimer(G.hwnd, kTimerRoll, 40, nullptr);
+    InvalidateRect(G.hwnd, &G.rcReel, FALSE);
+    if (G.phase == 0) InvalidateRect(G.hwnd, nullptr, FALSE);
 }
 
 static void CommitEdit()
@@ -675,7 +951,7 @@ static void CommitEdit()
     if (!G.editing) return;
     if (!G.typeBuf.empty() && G.selRow >= 0 && G.selRow < (int)G.pct.size())
     {
-        int v = _wtoi(G.typeBuf.c_str());
+        int v = (int)std::wcstoll(G.typeBuf.c_str(), nullptr, 10);
         if (v < 0)   v = 0;
         if (v > 100) v = 100;
         SetPercent(G.selRow, (double)v);
@@ -697,6 +973,8 @@ static void EnsureVisible()
 
 static void EnterBackend()
 {
+    if (G.phase != 0) return;
+
     std::wstring msg;
     if (!ValidateRange(msg)) { ShowError(msg); return; }
 
@@ -733,7 +1011,7 @@ static void ApplyDrag(int x)
     double t = (double)(x - BarLeft()) * 100.0 / (double)bw;
     if (t < 0.0)   t = 0.0;
     if (t > 100.0) t = 100.0;
-    t = (double)((int)(t * 10.0 + 0.5)) / 10.0;     // 吸附到 0.1%
+    t = (double)((int)(t * 10.0 + 0.5)) / 10.0;
     SetPercent(G.dragRow, t);
 }
 
@@ -755,9 +1033,10 @@ static void SaveConfig()
     FILE* f = _wfopen(path.c_str(), L"wb");
     if (!f) return;
 
-    std::fprintf(f, "v2\n");
+    std::fprintf(f, "v3\n");
     std::fprintf(f, "start %lld\n", G.startN);
     std::fprintf(f, "end %lld\n", G.endN);
+    std::fprintf(f, "sound %d\n", G.soundOn ? 1 : 0);
 
     long long n = 0;
     for (size_t i = 0; i < G.pct.size(); ++i)
@@ -776,17 +1055,22 @@ static void LoadConfig()
 
     char line[256] = {};
     long long s = 1, e = 50;
+    int sound = -1;
     std::vector<std::pair<long long, double>> pairs;
 
     while (std::fgets(line, sizeof(line), f))
     {
         long long a = 0;
         double    b = 0.0;
-        if (std::sscanf(line, "start %lld", &a) == 1)      s = a;
-        else if (std::sscanf(line, "end %lld", &a) == 1)   e = a;
+        int       c = 0;
+        if (std::sscanf(line, "start %lld", &a) == 1)        s = a;
+        else if (std::sscanf(line, "end %lld", &a) == 1)     e = a;
+        else if (std::sscanf(line, "sound %d", &c) == 1)     sound = c;
         else if (std::sscanf(line, "p %lld %lf", &a, &b) == 2) pairs.push_back({ a, b });
     }
     std::fclose(f);
+
+    if (sound >= 0) G.soundOn = (sound != 0);
 
     if (s <= e && ((unsigned long long)e - (unsigned long long)s) < (unsigned long long)kMaxRange)
     {
@@ -826,6 +1110,7 @@ static void UpdateHot(int x, int y)
     if (G.page == 0)
     {
         if (PtInRect(&G.rcBtnStart, pt)) h = 1;
+        else if (PtInRect(&G.rcSound, pt)) h = 5;
     }
     else
     {
@@ -865,6 +1150,15 @@ static void OnLButtonDown(int x, int y)
 
     if (G.page == 0)
     {
+        if (PtInRect(&G.rcSound, pt))
+        {
+            G.soundOn = !G.soundOn;
+            if (!G.soundOn) StopSound();
+            SaveConfig();
+            InvalidateRect(G.hwnd, &G.rcSound, FALSE);
+            InvalidateRect(G.hwnd, &G.rcSoundLabel, FALSE);
+            return;
+        }
         if (PtInRect(&G.rcBtnStart, pt))
         {
             G.pressBtn = 1;
@@ -920,7 +1214,7 @@ static void OnLButtonUp(int x, int y)
         if (PtInRect(&G.rcBtnStart, pt))
         {
             if (GetKeyState(VK_SHIFT) & 0x8000) EnterBackend();
-            else                                DoDraw();
+            else                                StartDraw();
         }
         return;
     }
@@ -955,7 +1249,7 @@ static void OnWheel(int delta, int sx, int sy)
     ScreenToClient(G.hwnd, &pt);
 
     int row = RowFromY(pt.y);
-    if (row >= 0 && pt.x >= BarLeft() - S(20) && pt.x <= G.rcList.right - S(110))
+    if (row >= 0 && pt.x >= BarLeft() - S(20) && pt.x <= G.rcList.right - S(120))
     {
         CommitEdit();
         double v = G.pct[(size_t)row] + (delta > 0 ? 1.0 : -1.0);
@@ -1084,6 +1378,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetWindowTextW(G.edEnd, std::to_wstring(G.endN).c_str());
         Layout();
         PlaceEdits();
+        if (G.pct.empty()) RebuildPct();
+        BuildReel();          // 先铺一卷静止的，避免窗口空着
         return 0;
     }
 
@@ -1116,7 +1412,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_CAPTURECHANGED:
-        // 拖动中失去捕获（Alt+Tab 等）时收尾，避免卡在拖拽状态
         if (G.dragRow >= 0)
         {
             G.dragRow = -1;
@@ -1145,21 +1440,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_TIMER:
-        if (wp == kTimerRoll)
-        {
-            if (!G.rolling) { KillTimer(hwnd, kTimerRoll); return 0; }
-            if (GetTickCount64() >= G.rollEnd)
-            {
-                KillTimer(hwnd, kTimerRoll);
-                G.rolling = false;
-                SetResultText(G.finalPick);
-            }
-            else
-            {
-                long long n = Count();
-                if (n > 0) SetResultText(G.startN + (long long)(G.rng() % (unsigned long long)n));
-            }
-        }
+        if (wp == kTimerAnim) TickAnim();
         return 0;
 
     case WM_COMMAND:
@@ -1202,12 +1483,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_CLOSE:
         if (G.page == 1) CommitEdit();
+        StopSound();
         SaveConfig();
         DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
-        KillTimer(hwnd, kTimerRoll);
+        KillTimer(hwnd, kTimerAnim);
         if (G.fTitle)  DeleteObject(G.fTitle);
         if (G.fLabel)  DeleteObject(G.fLabel);
         if (G.fInput)  DeleteObject(G.fInput);
@@ -1215,6 +1497,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (G.fBtn)    DeleteObject(G.fBtn);
         if (G.fRow)    DeleteObject(G.fRow);
         if (G.fPct)    DeleteObject(G.fPct);
+        if (G.fTile)   DeleteObject(G.fTile);
+        if (G.fTileSm) DeleteObject(G.fTileSm);
         if (G.brCard)  DeleteObject(G.brCard);
         PostQuitMessage(0);
         return 0;
@@ -1267,7 +1551,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
 
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
-    RECT wr = { 0, 0, S(720), S(540) };
+    RECT wr = { 0, 0, S(960), S(640) };
     AdjustWindowRectEx(&wr, style, FALSE, 0);
     int ww = wr.right - wr.left;
     int wh = wr.bottom - wr.top;
@@ -1294,7 +1578,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
             {
                 G.dpi = (int)d;
                 MakeFonts();
-                RECT cr = { 0, 0, S(720), S(540) };
+                RECT cr = { 0, 0, S(960), S(640) };
                 AdjustWindowRectEx(&cr, style, FALSE, 0);
                 SetWindowPos(hwnd, nullptr, px, py, cr.right - cr.left, cr.bottom - cr.top,
                              SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1314,7 +1598,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int)
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN && G.page == 0)
         {
             if (GetKeyState(VK_SHIFT) & 0x8000) EnterBackend();
-            else                                DoDraw();
+            else                                StartDraw();
             continue;
         }
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_TAB && G.page == 0)

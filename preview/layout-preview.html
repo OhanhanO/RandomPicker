@@ -5,93 +5,90 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: #dfe4ee; font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; padding: 20px; }
-  .stage { display: flex; flex-direction: column; gap: 24px; }
-  .win { width: 722px; height: 572px; background: #EEF2F9; position: relative; border: 1px solid #b8c0ce; }
+  .win { width: 962px; height: 672px; background: #EEF2F9; position: relative; border: 1px solid #b8c0ce; }
   .titlebar { height: 30px; background: #fbfcfd; border-bottom: 1px solid #dde1e7;
               font-size: 12px; color: #555; display: flex; align-items: center;
               justify-content: space-between; padding: 0 12px; }
   .client { position: absolute; left: 1px; top: 31px; right: 1px; bottom: 1px;
             background: #EEF2F9; overflow: hidden; }
   .abs { position: absolute; }
-  .title { font-size: 27px; font-weight: 700; color: #171B22; left: 36px; top: 24px; letter-spacing: .5px; }
+  .title { font-size: 31px; font-weight: 700; color: #171B22; left: 40px; top: 22px; letter-spacing: .5px; }
   .label { font-size: 15px; color: #7C8491; }
-  .edit { height: 62px; border: 1px solid #E5E9F1; border-radius: 14px; background: #fff;
-          display: flex; align-items: center; padding: 0 18px; font-size: 22px; color: #171B22; }
-  .card { left: 36px; top: 214px; width: 648px; height: 194px; background: #fff;
+  .edit { height: 64px; border: 1px solid #E5E9F1; border-radius: 14px; background: #fff;
+          display: flex; align-items: center; padding: 0 18px; font-size: 24px; color: #171B22; }
+  .btn { height: 64px; background: #3B6EF6; border-radius: 16px; color: #fff;
+         font-size: 26px; font-weight: 700; display: flex; align-items: center;
+         justify-content: center; letter-spacing: 6px; }
+  .reel { left: 40px; top: 214px; width: 880px; height: 220px; background: #fff;
+          border: 1px solid #E5E9F1; border-radius: 20px; overflow: hidden;
+          box-shadow: 0 3px 0 #E0E5EE, 0 6px 0 #E8EDF6; }
+  .tile { position: absolute; top: 35px; width: 120px; height: 150px; border-radius: 14px;
+          border: 2px solid #ccc; display: flex; align-items: center; justify-content: center;
+          font-size: 46px; font-weight: 700; color: #171B22; }
+  .tile .bar { position: absolute; left: 10px; right: 10px; bottom: 7px; height: 5px; border-radius: 3px; }
+  .gold { border-color: #F0B429; border-width: 3px; background: #FDF4E2;
+          box-shadow: 0 0 0 5px rgba(240,180,41,.20), 0 0 0 11px rgba(240,180,41,.11),
+                      0 0 0 18px rgba(240,180,41,.06); }
+  .pointer { display:none; position: absolute;
+             background: #9DB8FA; }
+  .tri { position: absolute; left: 465px; top: 4px; width: 0; height: 0;
+         border-left: 15px solid transparent; border-right: 15px solid transparent;
+         border-top: 12px solid #3B6EF6; }
+  .card { left: 40px; top: 458px; width: 880px; height: 136px; background: #fff;
           border: 1px solid #E5E9F1; border-radius: 20px;
           box-shadow: 0 3px 0 #E0E5EE, 0 6px 0 #E8EDF6; }
-  .cardlabel { font-size: 15px; color: #7C8491; left: 22px; top: 16px; }
-  .result { left: 14px; top: 52px; right: 14px; bottom: 16px; border: 1px solid #E5E9F1;
+  .cardlabel { font-size: 15px; color: #7C8491; left: 22px; top: 12px; }
+  .result { left: 14px; top: 42px; right: 14px; bottom: 10px; border: 1px solid #E5E9F1;
             border-radius: 14px; background: #F7FAFF; display: flex; align-items: center;
-            justify-content: center; font-size: 66px; font-weight: 700; color: #171B22; }
-  .btn { height: 68px; left: 36px; right: 36px; top: 434px; background: #3B6EF6;
-         border-radius: 18px; color: #fff; font-size: 25px; font-weight: 700;
-         display: flex; align-items: center; justify-content: center; letter-spacing: 6px; }
-  .chip { height: 36px; width: 112px; background: #fff; border: 1px solid #E5E9F1;
-          border-radius: 10px; font-size: 15px; color: #171B22;
-          display: flex; align-items: center; justify-content: center; }
-  .list { left: 36px; top: 96px; width: 648px; height: 356px; background: #fff;
-          border: 1px solid #E5E9F1; border-radius: 20px;
-          box-shadow: 0 3px 0 #E0E5EE, 0 6px 0 #E8EDF6; overflow: hidden; }
-  .row { position: absolute; left: 8px; width: 630px; height: 48px;
-         border-bottom: 1px solid #F1F4FA; }
-  .row.last { border-bottom: none; }
-  .row.sel { background: #F4F8FF; border-radius: 12px; border-bottom-color: transparent; }
-  .num { position: absolute; left: 18px; top: 13px; font-size: 20px; color: #171B22; }
-  .bar { position: absolute; left: 152px; top: 19px; height: 10px; width: 364px;
-         background: #ECF0F7; border-radius: 5px; }
-  .fill { height: 10px; background: #3B6EF6; border-radius: 5px; }
-  .pct { position: absolute; right: 22px; top: 13px; width: 98px; text-align: right;
-         font-size: 17px; color: #171B22; }
-  .save { height: 56px; left: 36px; right: 36px; top: 468px; background: #3B6EF6;
-          border-radius: 18px; color: #fff; font-size: 25px; font-weight: 700;
-          display: flex; align-items: center; justify-content: center; }
+            justify-content: center; font-size: 64px; font-weight: 700; color: #171B22; }
+  .switch { width: 56px; height: 30px; background: #3B6EF6; border-radius: 15px; }
+  .knob { position: absolute; right: 4px; top: 4px; width: 22px; height: 22px;
+          background: #fff; border-radius: 11px; }
+  .tri2 { top: auto; bottom: 4px; border-top: none; border-bottom: 12px solid #3B6EF6; }
 </style>
 </head>
 <body>
-<div class="stage">
 
-  <!-- 主界面 -->
-  <div class="win">
-    <div class="titlebar"><span>随机抽号器</span><span>—　□　×</span></div>
-    <div class="client">
-      <div class="abs title">随机抽号器</div>
-      <div class="abs label" style="left:36px; top:98px;">起始号码</div>
-      <div class="abs label" style="left:371px; top:98px;">终止号码</div>
-      <div class="abs edit" style="left:36px; top:124px; width:313px;">1</div>
-      <div class="abs edit" style="left:371px; top:124px; width:313px;">50</div>
+<div class="win">
+  <div class="titlebar"><span>随机抽号器</span><span>—　□　×</span></div>
+  <div class="client">
+    <div class="abs title">随机抽号器</div>
 
-      <div class="abs card">
-        <div class="abs cardlabel">抽中号码</div>
-        <div class="abs result">37</div>
-      </div>
+    <div class="abs label" style="left:802px; top:42px; width:54px; text-align:right;">音效</div>
+    <div class="abs switch" style="left:864px; top:38px;"><div class="knob"></div></div>
 
-      <div class="abs btn">开 始</div>
+    <div class="abs label" style="left:40px; top:100px;">起始号码</div>
+    <div class="abs label" style="left:320px; top:100px;">终止号码</div>
+    <div class="abs edit" style="left:40px; top:126px; width:260px;">1</div>
+    <div class="abs edit" style="left:320px; top:126px; width:260px;">50</div>
+    <div class="abs btn" style="left:600px; top:126px; width:320px;">开 始</div>
+
+    <div class="abs reel">
+      <div class="tile" style="left:24px; border-color:#B0C3D9; background:#F6F8FB;">
+        7<div class="bar" style="background:#B0C3D9"></div></div>
+      <div class="tile" style="left:156px; border-color:#4B69FF; background:#EDF0FF;">
+        23<div class="bar" style="background:#4B69FF"></div></div>
+      <div class="tile" style="left:288px; border-color:#4CC38A; background:#EDFAF3;">
+        41<div class="bar" style="background:#4CC38A"></div></div>
+      <div class="tile gold" style="left:420px;">
+        37<div class="bar" style="background:#F0B429"></div></div>
+      <div class="tile" style="left:552px; border-color:#EB4B4B; background:#FDEDED;">
+        12<div class="bar" style="background:#EB4B4B"></div></div>
+      <div class="tile" style="left:684px; border-color:#B0C3D9; background:#F6F8FB;">
+        58<div class="bar" style="background:#B0C3D9"></div></div>
+      <div class="tile" style="left:816px; border-color:#4B69FF; background:#EDF0FF;">
+        3<div class="bar" style="background:#4B69FF"></div></div>
+
+      <div class="tri"></div>
+      <div class="tri tri2"></div>
+    </div>
+
+    <div class="abs card">
+      <div class="abs cardlabel">抽中号码</div>
+      <div class="abs result">37</div>
     </div>
   </div>
-
-  <!-- 权重后台 -->
-  <div class="win">
-    <div class="titlebar"><span>随机抽号器</span><span>—　□　×</span></div>
-    <div class="client">
-      <div class="abs title">号码权重</div>
-      <div class="abs chip" style="left:448px; top:32px;">平均分配</div>
-      <div class="abs chip" style="left:572px; top:32px;">全部清零</div>
-
-      <div class="abs list">
-        <div class="row" style="top:6px;"><span class="num">1</span><div class="bar"><div class="fill" style="width:10px"></div></div><span class="pct">1.6%</span></div>
-        <div class="row" style="top:54px;"><span class="num">2</span><div class="bar"><div class="fill" style="width:10px"></div></div><span class="pct">1.6%</span></div>
-        <div class="row" style="top:102px;"><span class="num">3</span><div class="bar"><div class="fill" style="width:10px"></div></div><span class="pct">1.6%</span></div>
-        <div class="row" style="top:150px;"><span class="num">4</span><div class="bar"><div class="fill" style="width:10px"></div></div><span class="pct">1.6%</span></div>
-        <div class="row" style="top:198px;"><span class="num">5</span><div class="bar"><div class="fill" style="width:10px"></div></div><span class="pct">1.6%</span></div>
-        <div class="row" style="top:246px;"><span class="num">6</span><div class="bar"><div class="fill" style="width:10px"></div></div><span class="pct">1.6%</span></div>
-        <div class="row sel last" style="top:294px;"><span class="num">7</span><div class="bar"><div class="fill" style="width:73px"></div></div><span class="pct" style="color:#3B6EF6">20.0%</span></div>
-      </div>
-
-      <div class="abs save">保存并关闭</div>
-    </div>
-  </div>
-
 </div>
+
 </body>
 </html>

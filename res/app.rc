@@ -1,0 +1,8 @@
+// 胜利音效（抽中时播放）。本文件供 build_*.bat 使用，路径相对工程根目录。
+#define IDW_WIN 200
+
+IDW_WIN WAVE "res/win.wav"
+
+// 拿到图标后取消注释，并把 app.ico 放进 res/
+// #define IDI_APP 101
+// IDI_APP ICON "res/app.ico"
